@@ -3,7 +3,7 @@ import type { MessageRequest, MessageResponse, ProposedMove } from "../shared/ty
 import { flattenBookmarkTree, getBookmarkLeaves, pathToLabel } from "../shared/bookmarks";
 import { listModels } from "./aiClient";
 import { createBookmark, getBookmarkTree, moveBookmark } from "./chromeApi";
-import { applyCurrentPlan, cancelScan, currentState, downloadLatestBackup, pauseScan, restoreBackup, resumeScan, startScan, undoLastRun } from "./job";
+import { applyCurrentPlan, cancelScan, currentState, downloadLatestBackup, pauseScan, recoverableRuns, restoreBackup, resumeRun, resumeScan, startScan, undoLastRun } from "./job";
 import { loadSettings, saveSettings } from "./settings";
 import { getPlan } from "./db";
 
@@ -28,12 +28,16 @@ async function handleMessage(request: MessageRequest): Promise<unknown> {
   switch (request.type) {
     case "get-state":
       return currentState();
+    case "list-runs":
+      return recoverableRuns();
     case "start-scan":
       return startScan();
     case "pause-scan":
       return pauseScan();
     case "resume-scan":
       return resumeScan();
+    case "resume-run":
+      return resumeRun(request.runId);
     case "cancel-scan":
       return cancelScan();
     case "apply-plan":

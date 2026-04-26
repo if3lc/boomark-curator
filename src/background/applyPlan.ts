@@ -2,7 +2,7 @@ import { BROKEN_FOLDER, CURATOR_ROOT_FOLDER, DUPLICATE_FOLDER } from "../shared/
 import type { CurationPlan, OperationLogEntry } from "../shared/types";
 import { createBookmark, getBookmark, getBookmarkTree, moveBookmark, removeTree } from "./chromeApi";
 
-export async function applyCurationPlan(plan: CurationPlan): Promise<OperationLogEntry[]> {
+export async function applyCurationPlan(plan: CurationPlan, onMove?: (message: string) => Promise<void> | void): Promise<OperationLogEntry[]> {
   const operations: OperationLogEntry[] = [];
   await ensureFolderPath([CURATOR_ROOT_FOLDER]);
   const broken = await ensureFolderPath([CURATOR_ROOT_FOLDER, BROKEN_FOLDER]);
@@ -10,17 +10,20 @@ export async function applyCurationPlan(plan: CurationPlan): Promise<OperationLo
 
   for (const bookmarkId of plan.brokenBookmarkIds) {
     await moveWithLog(bookmarkId, broken.id, operations);
+    await onMove?.(`Moved broken bookmark ${bookmarkId} to ${CURATOR_ROOT_FOLDER} / ${BROKEN_FOLDER}`);
   }
 
   for (const group of plan.duplicateGroups) {
     for (const bookmarkId of group.bookmarkIds.slice(1)) {
       await moveWithLog(bookmarkId, duplicates.id, operations);
+      await onMove?.(`Moved duplicate bookmark ${bookmarkId} to ${CURATOR_ROOT_FOLDER} / ${DUPLICATE_FOLDER}`);
     }
   }
 
   for (const move of plan.moves) {
     const target = await ensureFolderPath(move.targetPath);
     await moveWithLog(move.bookmarkId, target.id, operations);
+    await onMove?.(`Moved bookmark ${move.bookmarkId} to ${move.targetPath.join(" / ")} (${Math.round(move.confidence * 100)}%)`);
   }
 
   return operations;

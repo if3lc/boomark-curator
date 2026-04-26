@@ -91,6 +91,12 @@ export interface OperationLogEntry {
   title?: string;
 }
 
+export interface ActivityLogEntry {
+  at: string;
+  level: "info" | "warning" | "error";
+  message: string;
+}
+
 export interface RunState {
   id: string;
   status: JobStatus;
@@ -105,13 +111,16 @@ export interface RunState {
   backupId?: string;
   planId?: string;
   error?: string;
+  log?: ActivityLogEntry[];
 }
 
 export type MessageRequest =
   | { type: "get-state" }
+  | { type: "list-runs" }
   | { type: "start-scan" }
   | { type: "pause-scan" }
   | { type: "resume-scan" }
+  | { type: "resume-run"; runId: string }
   | { type: "cancel-scan" }
   | { type: "apply-plan" }
   | { type: "undo-last-run" }

@@ -174,3 +174,24 @@ progress {
   font-size: 12px;
   font-weight: 700;
 }
+
+.log-list {
+  max-height: 320px;
+}
+
+.log-item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  border-left: 3px solid #c9d1dc;
+  padding: 6px 8px;
+  line-height: 1.35;
+}
+
+.log-item.warning {
+  border-left-color: #b7791f;
+}
+
+.log-item.error {
+  border-left-color: #c43b3b;
+}
