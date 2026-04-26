@@ -6,6 +6,10 @@ export async function checkLink(record: BookmarkRecord, settings: Settings): Pro
     return result(record, "unsupported-scheme");
   }
 
+  if (requiresOpaqueProbe(record.url)) {
+    return opaqueProbe(record, settings);
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), settings.linkTimeoutMs);
 
@@ -39,6 +43,37 @@ export async function checkLink(record: BookmarkRecord, settings: Settings): Pro
     return result(record, fallbackController.signal.aborted ? "timeout" : "network-error", undefined, String(error));
   } finally {
     clearTimeout(fallbackTimeout);
+  }
+}
+
+async function opaqueProbe(record: BookmarkRecord, settings: Settings): Promise<LinkCheckResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), settings.linkTimeoutMs);
+  try {
+    await fetch(record.url!, {
+      method: "GET",
+      mode: "no-cors",
+      redirect: "follow",
+      signal: controller.signal,
+      cache: "no-store"
+    });
+    return result(record, "restricted", undefined, "Browser-protected URL; checked with opaque no-cors probe.");
+  } catch (error) {
+    return result(record, controller.signal.aborted ? "timeout" : "restricted", undefined, String(error));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function requiresOpaqueProbe(rawUrl: string): boolean {
+  try {
+    const url = new URL(rawUrl);
+    return (
+      (url.hostname === "chrome.google.com" && url.pathname.startsWith("/webstore")) ||
+      url.hostname === "chromewebstore.google.com"
+    );
+  } catch {
+    return false;
   }
 }
 

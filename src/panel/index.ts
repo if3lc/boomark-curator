@@ -41,6 +41,8 @@ async function action<T>(request: Parameters<typeof sendMessage<T>>[0]): Promise
 function render(): void {
   const progressValue = state?.progress.total ? Math.round((state.progress.current / state.progress.total) * 100) : 0;
   const canApply = state?.status === "needs-review" && Boolean(plan);
+  const isBusy = state?.status === "running" || state?.status === "applying";
+  const canResume = state?.status === "paused" || state?.status === "failed" || state?.status === "cancelled";
 
   app.innerHTML = `
     <section class="shell">
@@ -58,17 +60,32 @@ function render(): void {
           <p class="muted">${escapeHtml(state?.message ?? "Ready")}</p>
           <progress value="${progressValue}" max="100"></progress>
           <div class="row muted">
-            <span>${escapeHtml(state?.progress.phase ?? "idle")}</span>
+            <span>${escapeHtml(state?.mode === "link-cleanup" ? "broken-link cleanup" : state?.progress.phase ?? "idle")}</span>
             <span>${state?.progress.current ?? 0} / ${state?.progress.total ?? 0}</span>
           </div>
           <div class="buttons">
-            <button class="primary" data-action="start">Start scan</button>
             <button data-action="pause" ${state?.status === "running" ? "" : "disabled"}>Pause</button>
-            <button data-action="resume" ${state?.status === "paused" || state?.status === "failed" || state?.status === "cancelled" ? "" : "disabled"}>Resume current</button>
-            <button data-action="backup" ${state?.backupId ? "" : "disabled"}>Download backup</button>
-            <button data-action="restore">Restore backup file</button>
-            <button data-action="undo">Undo last run</button>
+            <button data-action="resume" ${canResume ? "" : "disabled"}>Resume current</button>
             <button class="danger" data-action="cancel">Cancel</button>
+          </div>
+          ${isBusy ? `<p class="muted">A run is active. Start, restore, and apply actions are locked until it finishes or is paused.</p>` : ""}
+        </article>
+        <article class="card stack">
+          <h2>Organize with AI</h2>
+          <p class="muted">Backs up bookmarks, checks link health, detects duplicates, then asks the selected local model to propose a folder organization plan. In Fresh taxonomy mode, the new tree is created under Bookmark Curator / Fresh Taxonomy. Nothing is moved until you review and apply the plan.</p>
+          <button class="primary" data-action="start" ${isBusy ? "disabled" : ""}>Start AI organization</button>
+        </article>
+        <article class="card stack">
+          <h2>Find Broken Links</h2>
+          <p class="muted">Runs only the link checker. It does not call AI. Broken, timed out, unsupported, or unreachable bookmarks are collected into a review plan and can be moved to Bookmark Curator / Broken Links after approval.</p>
+          <button data-action="broken" ${isBusy ? "disabled" : ""}>Check broken links</button>
+        </article>
+        <article class="card stack">
+          <h2>Backup and Restore</h2>
+          <p class="muted">Download the latest run backup before applying changes, or restore a backup into a separate folder without overwriting current bookmarks.</p>
+          <div class="buttons">
+            <button data-action="backup" ${state?.backupId ? "" : "disabled"}>Download latest backup</button>
+            <button data-action="restore" ${isBusy ? "disabled" : ""}>Restore backup file</button>
           </div>
           <input id="restoreFile" type="file" accept="application/json" hidden />
         </article>
@@ -80,13 +97,7 @@ function render(): void {
           <h2>Activity Log</h2>
           ${renderLog(state)}
         </article>
-        <article class="card stack">
-          <div class="row">
-            <h2>Review</h2>
-            <button class="primary" data-action="apply" ${canApply ? "" : "disabled"}>Apply approved plan</button>
-          </div>
-          ${renderPlan(plan)}
-        </article>
+        ${renderReviewSection(plan, canApply, isBusy)}
         <article class="card stack">
           <h2>Settings</h2>
           <p class="muted">Use the extension options page to choose the local model, taxonomy mode, and link-check policy.</p>
@@ -97,6 +108,7 @@ function render(): void {
   `;
 
   app.querySelector('[data-action="start"]')?.addEventListener("click", () => void action({ type: "start-scan" }));
+  app.querySelector('[data-action="broken"]')?.addEventListener("click", () => void action({ type: "start-link-cleanup" }));
   app.querySelector('[data-action="pause"]')?.addEventListener("click", () => void action({ type: "pause-scan" }));
   app.querySelector('[data-action="resume"]')?.addEventListener("click", () => void action({ type: "resume-scan" }));
   app.querySelector('[data-action="backup"]')?.addEventListener("click", () => void action({ type: "download-backup" }));
@@ -112,7 +124,7 @@ function render(): void {
 }
 
 function renderPlan(nextPlan: CurationPlan | undefined): string {
-  if (!nextPlan) return `<p class="muted">Run a scan to generate a reviewable plan.</p>`;
+  if (!nextPlan) return "";
   return `
     <div class="stat-grid">
       <div class="stat"><strong>${nextPlan.moves.length}</strong><span>Moves</span></div>
@@ -132,6 +144,30 @@ function renderPlan(nextPlan: CurationPlan | undefined): string {
         )
         .join("")}
     </div>
+  `;
+}
+
+function renderReviewSection(nextPlan: CurationPlan | undefined, canApply: boolean, isBusy: boolean): string {
+  const isCompleted = state?.status === "completed";
+  if (!nextPlan && !isCompleted) return "";
+
+  const title = isCompleted ? "Last Result" : "Review Plan";
+  const description = isCompleted
+    ? "The last operation finished. You can undo the last applied run if the result is not what you expected."
+    : "Review the generated plan before changing Chrome bookmarks. Broken-link cleanup moves only the broken items; AI organization may also move bookmarks into proposed folders. Empty folders left behind are removed after apply.";
+
+  return `
+    <article class="card stack">
+      <div class="row">
+        <h2>${title}</h2>
+        ${canApply && !isBusy ? `<button class="primary" data-action="apply">Apply approved plan</button>` : ""}
+      </div>
+      <p class="muted">${description}</p>
+      ${renderPlan(nextPlan)}
+      <div class="buttons">
+        <button data-action="undo" ${isBusy ? "disabled" : ""}>Undo last applied run</button>
+      </div>
+    </article>
   `;
 }
 

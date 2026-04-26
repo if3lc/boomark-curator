@@ -1,4 +1,4 @@
-import { NEEDS_REVIEW_FOLDER } from "../shared/defaults";
+import { LINK_CHECK_ALARM, NEEDS_REVIEW_FOLDER } from "../shared/defaults";
 import type { MessageRequest, MessageResponse, ProposedMove } from "../shared/types";
 import { flattenBookmarkTree, getBookmarkLeaves, pathToLabel } from "../shared/bookmarks";
 import { listModels } from "./aiClient";
@@ -6,6 +6,7 @@ import { createBookmark, getBookmarkTree, moveBookmark } from "./chromeApi";
 import { applyCurrentPlan, cancelScan, currentState, downloadLatestBackup, pauseScan, recoverableRuns, restoreBackup, resumeRun, resumeScan, startScan, undoLastRun } from "./job";
 import { loadSettings, saveSettings } from "./settings";
 import { getPlan } from "./db";
+import { getWritableRoot } from "./bookmarkRoots";
 
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -24,6 +25,13 @@ chrome.bookmarks.onCreated.addListener((id, node) => {
   });
 });
 
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== LINK_CHECK_ALARM) return;
+  void resumeScan().catch((error) => {
+    console.warn("Bookmark Curator scheduled resume failed", error);
+  });
+});
+
 async function handleMessage(request: MessageRequest): Promise<unknown> {
   switch (request.type) {
     case "get-state":
@@ -32,6 +40,8 @@ async function handleMessage(request: MessageRequest): Promise<unknown> {
       return recoverableRuns();
     case "start-scan":
       return startScan();
+    case "start-link-cleanup":
+      return startScan("link-cleanup");
     case "pause-scan":
       return pauseScan();
     case "resume-scan":
@@ -117,8 +127,9 @@ async function fetchPageSummary(url: string): Promise<string> {
 
 async function ensureFolder(path: string[]): Promise<chrome.bookmarks.BookmarkTreeNode> {
   const tree = await getBookmarkTree();
-  let parentId = "1";
-  let siblings = tree[0]?.children ?? [];
+  const root = getWritableRoot(tree);
+  let parentId = root.id;
+  let siblings = root.children ?? [];
   let current: chrome.bookmarks.BookmarkTreeNode | undefined;
 
   for (const title of path) {

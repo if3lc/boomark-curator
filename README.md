@@ -8,10 +8,13 @@ Bookmark Curator is a Chrome Manifest V3 extension for backing up, checking, and
 - Polite link checks with browser `fetch` (`HEAD`, then short `GET` fallback)
 - Duplicate detection by normalized URL
 - AI-generated organization plans using `http://localhost:8317/v1`
+- Broken-link-only cleanup mode that does not call AI
+- Organization modes for existing folders, hybrid cleanup, or a fresh taxonomy under `Bookmark Curator / Fresh Taxonomy`
 - Review-before-apply workflow
 - Resumable scans with saved per-bookmark link-check progress
 - Single interrupted-run checkpoint with pause, resume, and retry controls
 - Undo for the last applied move run
+- Safe empty-folder cleanup after applying a plan
 - Side panel progress dashboard
 - Options page for model, taxonomy mode, thresholds, and exclusions
 - Auto-placement for newly created bookmarks when confidence is high enough

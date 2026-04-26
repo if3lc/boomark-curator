@@ -34,7 +34,7 @@ function readSettings(): Settings {
   return {
     aiBaseUrl: value("aiBaseUrl"),
     selectedModel: value("selectedModel"),
-    taxonomyMode: value("taxonomyMode") as Settings["taxonomyMode"],
+    taxonomyMode: radioValue("taxonomyMode") as Settings["taxonomyMode"],
     linkTimeoutMs: Number(value("linkTimeoutMs")),
     linkConcurrency: Number(value("linkConcurrency")),
     confidenceThreshold: Number(value("confidenceThreshold")),
@@ -70,13 +70,24 @@ function render(): void {
         </article>
         <article class="card stack">
           <h2>Organization</h2>
-          <label>Taxonomy mode
-            <select id="taxonomyMode">
-              <option value="existing" ${settings.taxonomyMode === "existing" ? "selected" : ""}>Existing folders only</option>
-              <option value="hybrid" ${settings.taxonomyMode === "hybrid" ? "selected" : ""}>Hybrid</option>
-              <option value="fresh" ${settings.taxonomyMode === "fresh" ? "selected" : ""}>Fresh taxonomy</option>
-            </select>
-          </label>
+          <p class="muted">Choose how much the AI should respect your current bookmark folders.</p>
+          <div class="radio-grid">
+            ${renderRadioCard(
+              "existing",
+              "Existing folders only",
+              "Move bookmarks only into folders that already exist. This is the least disruptive mode."
+            )}
+            ${renderRadioCard(
+              "hybrid",
+              "Hybrid cleanup",
+              "Keep useful existing folders, but allow the AI to suggest new folders where they make the structure clearer."
+            )}
+            ${renderRadioCard(
+              "fresh",
+              "Fresh taxonomy",
+              "Ignore the current category structure and build a new tree under Bookmark Curator / Fresh Taxonomy. Old folders are left untouched."
+            )}
+          </div>
           <label>Confidence threshold
             <input id="confidenceThreshold" type="number" min="0" max="1" step="0.01" value="${settings.confidenceThreshold}" />
           </label>
@@ -141,6 +152,23 @@ async function testConnection(): Promise<void> {
 
 function value(id: string): string {
   return document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(`#${id}`)?.value.trim() ?? "";
+}
+
+function radioValue(name: string): string {
+  return document.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)?.value ?? "";
+}
+
+function renderRadioCard(value: Settings["taxonomyMode"], title: string, description: string): string {
+  const checked = settings.taxonomyMode === value ? "checked" : "";
+  return `
+    <label class="radio-card">
+      <input type="radio" name="taxonomyMode" value="${value}" ${checked} />
+      <span>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(description)}</small>
+      </span>
+    </label>
+  `;
 }
 
 function splitLines(value: string): string[] {

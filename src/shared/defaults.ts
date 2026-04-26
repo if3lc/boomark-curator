@@ -28,3 +28,6 @@ export const CURATOR_ROOT_FOLDER = "Bookmark Curator";
 export const BROKEN_FOLDER = "Broken Links";
 export const DUPLICATE_FOLDER = "Duplicates";
 export const NEEDS_REVIEW_FOLDER = "Needs Review";
+export const FRESH_TAXONOMY_FOLDER = "Fresh Taxonomy";
+export const LINK_CHECK_BATCH_SIZE = 50;
+export const LINK_CHECK_ALARM = "bookmark-curator-continue-link-checks";

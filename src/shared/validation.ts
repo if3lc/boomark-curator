@@ -19,12 +19,12 @@ export const CurationPlanSchema = z.object({
       reason: z.string()
     })
   ),
-  brokenBookmarkIds: z.array(z.string()),
+  brokenBookmarkIds: z.array(z.string()).default([]),
   duplicateGroups: z.array(
     z.object({
       normalizedUrl: z.string(),
       bookmarkIds: z.array(z.string()).min(2)
     })
-  ),
-  warnings: z.array(z.string())
+  ).default([]),
+  warnings: z.array(z.string()).default([])
 });

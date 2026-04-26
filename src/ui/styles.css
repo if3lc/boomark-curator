@@ -56,6 +56,10 @@ body {
   font-weight: 700;
 }
 
+.card p {
+  margin: 0;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -74,6 +78,48 @@ body {
   gap: 8px;
 }
 
+.radio-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.radio-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 11px;
+  color: #202124;
+  cursor: pointer;
+}
+
+.radio-card:has(input:checked) {
+  border-color: #246bfe;
+  background: #f4f7ff;
+}
+
+.radio-card input {
+  width: auto;
+  min-height: auto;
+  margin: 3px 0 0;
+}
+
+.radio-card strong {
+  display: block;
+  font-size: 13px;
+}
+
+.radio-card small {
+  display: block;
+  margin-top: 4px;
+  color: #697386;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
 button,
 select,
 input,
@@ -89,6 +135,7 @@ button {
   cursor: pointer;
   min-height: 34px;
   padding: 0 12px;
+  white-space: normal;
 }
 
 button.primary {

@@ -1,13 +1,14 @@
 import { createSnapshot } from "./backup";
-import { createBookmark, downloadJson } from "./chromeApi";
+import { createBookmark, downloadJson, getBookmarkTree } from "./chromeApi";
 import { getBackup, getLastOperations, getLinkResults, getPlan, getRun, getState, listRuns, pruneRunsExcept, saveBackup, saveLinkResult, saveOperations, savePlan, saveState } from "./db";
 import { applyCurationPlan, undoOperations } from "./applyPlan";
 import { loadSettings } from "./settings";
 import { checkLink } from "./linkChecker";
 import { createCurationPlan } from "./aiClient";
 import { findDuplicateGroups, getBookmarkLeaves } from "../shared/bookmarks";
-import { IDLE_STATE } from "../shared/defaults";
-import type { BookmarkRecord, BookmarkSnapshot, LinkCheckResult, RunState, Settings } from "../shared/types";
+import { IDLE_STATE, LINK_CHECK_ALARM, LINK_CHECK_BATCH_SIZE } from "../shared/defaults";
+import type { BookmarkRecord, BookmarkSnapshot, CurationPlan, LinkCheckResult, RunMode, RunState, Settings } from "../shared/types";
+import { getWritableRoot } from "./bookmarkRoots";
 
 let activeAbort = false;
 let pauseRequested = false;
@@ -22,7 +23,7 @@ export async function recoverableRuns(): Promise<RunState[]> {
     .slice(0, 1);
 }
 
-export async function startScan(): Promise<RunState> {
+export async function startScan(mode: RunMode = "organize"): Promise<RunState> {
   activeAbort = false;
   pauseRequested = false;
   const settings = await loadSettings();
@@ -30,10 +31,11 @@ export async function startScan(): Promise<RunState> {
 
   await setState({
     id: runId,
+    mode,
     status: "running",
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    message: "Creating backup before scan",
+    message: mode === "link-cleanup" ? "Creating backup before broken-link cleanup" : "Creating backup before scan",
     progress: { current: 0, total: 0, phase: "backup" },
     log: [{ at: new Date().toISOString(), level: "info", message: "Started scan and backup creation." }]
   });
@@ -56,6 +58,7 @@ export async function startScan(): Promise<RunState> {
 export async function resumeRun(runId?: string): Promise<RunState> {
   activeAbort = false;
   pauseRequested = false;
+  await chrome.alarms.clear(LINK_CHECK_ALARM);
   const state = runId ? await getRun(runId) : await currentState();
   if (!state || !state.backupId) {
     throw new Error("No resumable run was found.");
@@ -74,13 +77,38 @@ async function continueRun(runId: string): Promise<RunState> {
     if (!snapshot) throw new Error("Run backup was not found.");
     const leaves = getBookmarkLeaves(snapshot.records);
     const duplicateGroups = findDuplicateGroups(snapshot.records);
-    const linkResults = await ensureLinkResults(runId, leaves, settings);
+    const linkResults = await ensureLinkResults(runId, leaves, settings, LINK_CHECK_BATCH_SIZE);
+
+    if (linkResults.length < leaves.length) {
+      await addLog(`Batch complete. ${leaves.length - linkResults.length} links remain; continuing shortly.`);
+      await chrome.alarms.create(LINK_CHECK_ALARM, { delayInMinutes: 0.05 });
+      return setState({
+        ...(await currentState()),
+        status: "running",
+        continuation: "link-checks",
+        message: `Checked ${linkResults.length} of ${leaves.length}. Next batch is scheduled.`,
+        progress: { current: linkResults.length, total: leaves.length, phase: "links" }
+      });
+    }
 
     if (pauseRequested) {
       return setState({ ...(await currentState()), status: "paused", message: "Paused. Resume will continue from the next unchecked bookmark." });
     }
     if (activeAbort) {
       return setState({ ...(await currentState()), status: "cancelled", message: "Cancelled. Resume will continue from saved link-check progress." });
+    }
+
+    if (state.mode === "link-cleanup") {
+      const plan = createBrokenLinksOnlyPlan(linkResults);
+      const planId = await savePlan(plan);
+      await addLog(`Broken-link cleanup plan created: ${plan.brokenBookmarkIds.length} bookmarks will move to review.`);
+      return setState({
+        ...(await currentState()),
+        status: "needs-review",
+        planId,
+        message: `Review ${plan.brokenBookmarkIds.length} broken or unreachable links before moving them to review.`,
+        progress: { current: leaves.length, total: leaves.length, phase: "review" }
+      });
     }
 
     await setState({
@@ -114,12 +142,14 @@ async function continueRun(runId: string): Promise<RunState> {
 
 export async function cancelScan(): Promise<RunState> {
   activeAbort = true;
+  await chrome.alarms.clear(LINK_CHECK_ALARM);
   await addLog("Cancel requested. Current checkpoint will be kept.");
   return setState({ ...(await currentState()), status: "cancelled", message: "Cancel requested. Saved progress can be resumed later." });
 }
 
 export async function pauseScan(): Promise<RunState> {
   pauseRequested = true;
+  await chrome.alarms.clear(LINK_CHECK_ALARM);
   await addLog("Pause requested. The current bookmark check will finish before stopping.");
   return setState({ ...(await currentState()), status: "paused", message: "Pause requested. Current bookmark check will finish first." });
 }
@@ -134,13 +164,33 @@ export async function applyCurrentPlan(): Promise<RunState> {
   const plan = await getPlan(state.planId);
   if (!plan) throw new Error("Saved curation plan was not found.");
 
-  await setState({ ...state, status: "applying", message: "Applying approved bookmark changes", progress: { ...state.progress, phase: "apply" } });
-  await addLog("Applying approved curation plan.");
-  const operations = await applyCurationPlan(plan, (message) => addLog(message));
-  await saveOperations(operations);
-  await addLog(`Apply finished with ${operations.length} operations.`);
+  const total = plan.brokenBookmarkIds.length + plan.duplicateGroups.reduce((sum, group) => sum + Math.max(0, group.bookmarkIds.length - 1), 0) + plan.moves.length;
+  await setState({ ...state, status: "applying", message: "Applying approved bookmark changes", progress: { current: 0, total, phase: "apply" } });
+  await addLog(`Applying approved curation plan with ${total} planned bookmark operations.`);
 
-  return setState({ ...(await currentState()), status: "completed", message: `Applied ${operations.length} bookmark operations.` });
+  try {
+    let lastLoggedAt = 0;
+    const operations = await applyCurationPlan(plan, async (message, completed, operationTotal) => {
+      await setState({
+        ...(await currentState()),
+        status: "applying",
+        message,
+        progress: { current: completed, total: operationTotal, phase: "apply" }
+      });
+      if (completed === 0 || completed === operationTotal || completed - lastLoggedAt >= 10 || message.startsWith("Moving")) {
+        lastLoggedAt = completed;
+        await addLog(message);
+      }
+    });
+    await saveOperations(operations);
+    await addLog(`Apply finished with ${operations.length} bookmark moves.`);
+
+    return setState({ ...(await currentState()), status: "completed", message: `Applied ${operations.length} bookmark moves.` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await addLog(`Apply failed: ${message}`, "error");
+    return setState({ ...(await currentState()), status: "failed", message: `Apply failed: ${message}`, error: message });
+  }
 }
 
 export async function undoLastRun(): Promise<RunState> {
@@ -161,7 +211,8 @@ export async function downloadLatestBackup(): Promise<number> {
 }
 
 export async function restoreBackup(_backup: BookmarkSnapshot): Promise<RunState> {
-  const folder = await createBookmark({ parentId: "1", title: `Bookmark Curator Restore ${new Date().toISOString().slice(0, 10)}` });
+  const root = getWritableRoot(await getBookmarkTree());
+  const folder = await createBookmark({ parentId: root.id, title: `Bookmark Curator Restore ${new Date().toISOString().slice(0, 10)}` });
   for (const child of _backup.tree[0]?.children ?? []) {
     await cloneNode(child, folder.id);
   }
@@ -187,18 +238,33 @@ async function cloneNode(node: chrome.bookmarks.BookmarkTreeNode, parentId: stri
   }
 }
 
-async function ensureLinkResults(runId: string, leaves: BookmarkRecord[], settings: Settings): Promise<LinkCheckResult[]> {
+function createBrokenLinksOnlyPlan(linkResults: LinkCheckResult[]): CurationPlan {
+  const brokenStatuses = new Set<LinkCheckResult["status"]>(["missing", "timeout", "network-error", "unsupported-scheme"]);
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    taxonomyMode: "hybrid",
+    folders: [],
+    moves: [],
+    brokenBookmarkIds: linkResults.filter((result) => brokenStatuses.has(result.status)).map((result) => result.bookmarkId),
+    duplicateGroups: [],
+    warnings: []
+  };
+}
+
+async function ensureLinkResults(runId: string, leaves: BookmarkRecord[], settings: Settings, batchSize: number): Promise<LinkCheckResult[]> {
   const stored = await getLinkResults(runId);
   const byBookmarkId = new Map(stored.map((result) => [result.bookmarkId, result]));
-  const pending = leaves.filter((record) => !byBookmarkId.has(record.id));
+  const pending = leaves.filter((record) => !byBookmarkId.has(record.id)).slice(0, batchSize);
+  const totalPending = leaves.length - stored.length;
 
   await setState({
     ...(await currentState()),
     status: "running",
-    message: pending.length ? `Checking links. ${stored.length} already done, ${pending.length} remaining.` : "All links already checked. Continuing to AI planning.",
+    message: totalPending ? `Checking links. ${stored.length} already done, ${totalPending} remaining.` : "All links already checked. Continuing to AI planning.",
     progress: { current: stored.length, total: leaves.length, phase: "links" }
   });
-  await addLog(pending.length ? `Link check queue: ${stored.length} done, ${pending.length} remaining.` : "All link checks already completed.");
+  await addLog(totalPending ? `Link check batch: ${stored.length} done, ${totalPending} remaining, processing up to ${pending.length}.` : "All link checks already completed.");
 
   const queue = [...pending];
   let completed = stored.length;
@@ -219,12 +285,24 @@ async function ensureLinkResults(runId: string, leaves: BookmarkRecord[], settin
           : `Checking links. ${completed} of ${leaves.length} complete. Last: ${record.title || record.url}`,
         progress: { current: completed, total: leaves.length, phase: "links" }
       });
-      await addLog(`${result.status}: ${record.title || record.url}`);
+      await addLog(`Link check: ${result.status} - ${record.title || record.url}`);
     }
   }
 
   await Promise.all(Array.from({ length: Math.max(1, settings.linkConcurrency) }, () => worker()));
-  return [...byBookmarkId.values()];
+  const results = [...byBookmarkId.values()];
+  await addLog(`Link check finished: ${summarizeLinkResults(results)}.`);
+  return results;
+}
+
+function summarizeLinkResults(results: LinkCheckResult[]): string {
+  const counts = results.reduce<Record<string, number>>((acc, result) => {
+    acc[result.status] = (acc[result.status] ?? 0) + 1;
+    return acc;
+  }, {});
+  return Object.entries(counts)
+    .map(([status, count]) => `${count} ${status}`)
+    .join(", ");
 }
 
 function describePhase(phase: RunState["progress"]["phase"]): string {

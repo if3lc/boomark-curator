@@ -10,6 +10,7 @@ export type LinkStatus =
   | "unsupported-scheme";
 
 export type JobStatus = "idle" | "running" | "paused" | "needs-review" | "applying" | "completed" | "failed" | "cancelled";
+export type RunMode = "organize" | "link-cleanup";
 
 export interface Settings {
   aiBaseUrl: string;
@@ -83,12 +84,13 @@ export interface CurationPlan {
 }
 
 export interface OperationLogEntry {
-  type: "move" | "create-folder";
+  type: "move" | "create-folder" | "remove-empty-folder";
   bookmarkId: string;
   fromParentId?: string;
   fromIndex?: number;
   toParentId?: string;
   title?: string;
+  path?: string[];
 }
 
 export interface ActivityLogEntry {
@@ -99,6 +101,7 @@ export interface ActivityLogEntry {
 
 export interface RunState {
   id: string;
+  mode?: RunMode;
   status: JobStatus;
   startedAt?: string;
   updatedAt: string;
@@ -112,12 +115,14 @@ export interface RunState {
   planId?: string;
   error?: string;
   log?: ActivityLogEntry[];
+  continuation?: "link-checks" | "ai-planning";
 }
 
 export type MessageRequest =
   | { type: "get-state" }
   | { type: "list-runs" }
   | { type: "start-scan" }
+  | { type: "start-link-cleanup" }
   | { type: "pause-scan" }
   | { type: "resume-scan" }
   | { type: "resume-run"; runId: string }
